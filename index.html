@@ -87,6 +87,14 @@
 
         <div class="settle-panel" id="settlePanel"></div>
 
+        <div class="filter-bar" id="billFilters">
+          <select id="fType"><option value="">全部类型</option></select>
+          <select id="fMonth"><option value="">全部月份</option></select>
+          <select id="fPayer"><option value="">全部付款人</option></select>
+          <select id="fStatus"><option value="">全部状态</option><option value="open">未结</option><option value="settled">已结</option></select>
+          <button class="ghost-btn" id="exportBtn">导出 CSV</button>
+        </div>
+
         <div class="section-head">
           <h3>账单明细</h3>
           <span class="muted" id="billCount"></span>
@@ -105,7 +113,23 @@
 
         <div class="week-banner" id="weekBanner">本周</div>
 
-        <div class="duty-list" id="dutyList"></div>
+        <div class="seg" id="dutySeg">
+          <button class="seg-btn is-active" data-dutyview="list">本周排班</button>
+          <button class="seg-btn" data-dutyview="calendar">日历视图</button>
+        </div>
+
+        <div id="dutyListView">
+          <div class="duty-list" id="dutyList"></div>
+        </div>
+
+        <div id="dutyCalendarView" hidden>
+          <div class="calendar" id="dutyCalendar"></div>
+        </div>
+
+        <div class="section-head">
+          <h3>谁做得多（近14天）</h3>
+        </div>
+        <div class="card-list" id="dutyStats"></div>
 
         <div class="section-head">
           <h3>清洁任务</h3>

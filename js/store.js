@@ -28,6 +28,11 @@ SH.calc = {
 
   /** 单笔账单的分摊结果 */
   billShares(bill) {
+    if (bill.splitMode === 'amount' && bill.splitAmounts) {
+      const out = {};
+      bill.splitIds.forEach(id => { out[id] = bill.splitAmounts[id] || 0; });
+      return out;
+    }
     const weights = bill.splitMode === 'custom' ? bill.splitWeights : null;
     return SH.calc.splitAmount(bill.amount, bill.splitIds, weights);
   },
@@ -109,13 +114,30 @@ SH.store = (function () {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && parsed.roommates && parsed.bills) {
-          state = parsed;
+          state = migrate(parsed);
           return;
         }
       }
     } catch (e) { /* 忽略，走 seed */ }
     state = SH.seed();
     persist();
+  }
+
+  function migrate(s) {
+    s.bills.forEach(b => { if (b.settled === undefined) b.settled = false; });
+    s.dutyTasks.forEach(t => {
+      if (!t.area) t.area = '其他';
+      if (t.day === undefined) t.day = (t.freq === '每周' ? 6 : (t.freq === '每月' ? 1 : null));
+    });
+    if (!s.schedule) {
+      s.schedule = { weekStart: SH.utils.weekStartISO(), weekEnd: SH.utils.weekEndISO(), assignments: {}, done: {}, records: [], leaves: [] };
+    } else {
+      if (!s.schedule.records) s.schedule.records = [];
+      if (!s.schedule.leaves) s.schedule.leaves = [];
+    }
+    if (!s.meta) s.meta = {};
+    s.meta.version = 2;
+    return s;
   }
 
   function persist() {
@@ -178,6 +200,10 @@ SH.store = (function () {
       state.bills = state.bills.filter(b => b.id !== id);
       persist();
     },
+    toggleSettled(id) {
+      const b = state.bills.find(x => x.id === id);
+      if (b) { b.settled = !b.settled; persist(); }
+    },
 
     /* ---- 值日 ---- */
     addDutyTask(task) {
@@ -197,15 +223,41 @@ SH.store = (function () {
       state.schedule.assignments[taskId] = roommateId;
       persist();
     },
-    toggleDone(taskId) {
+    toggleDone(taskId, roommateId) {
       const today = SH.utils.todayISO();
       const cur = state.schedule.done[taskId];
-      if (cur === today) delete state.schedule.done[taskId];
-      else state.schedule.done[taskId] = today;
+      if (cur === today) {
+        delete state.schedule.done[taskId];
+        state.schedule.records = state.schedule.records.filter(r => !(r.taskId === taskId && r.date === today));
+      } else {
+        state.schedule.done[taskId] = today;
+        state.schedule.records.push({ id: SH.utils.uid('rc'), taskId, roommateId: roommateId || state.schedule.assignments[taskId], date: today });
+      }
       persist();
     },
     isDone(taskId) {
       return state.schedule.done[taskId] === SH.utils.todayISO();
+    },
+    swapAssignments(taskA, taskB) {
+      const a = state.schedule.assignments[taskA];
+      const b = state.schedule.assignments[taskB];
+      state.schedule.assignments[taskA] = b;
+      state.schedule.assignments[taskB] = a;
+      persist();
+    },
+    addLeave(taskId, roommateId, reason) {
+      state.schedule.leaves = state.schedule.leaves.filter(l => l.taskId !== taskId);
+      const leave = { id: SH.utils.uid('lv'), taskId, roommateId, reason, date: SH.utils.todayISO() };
+      state.schedule.leaves.push(leave);
+      persist();
+      return leave;
+    },
+    removeLeave(taskId) {
+      state.schedule.leaves = state.schedule.leaves.filter(l => l.taskId !== taskId);
+      persist();
+    },
+    getLeave(taskId) {
+      return state.schedule.leaves.find(l => l.taskId === taskId) || null;
     },
     /** 轮换：每个任务顺延给下一位室友 */
     rotate() {

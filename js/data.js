@@ -102,8 +102,13 @@ SH.BILL_TYPES = [
 SH.SPLIT_MODES = [
   { value: 'even',  label: '均摊' },
   { value: 'head',  label: '按人头' },
-  { value: 'custom',label: '自定义比例' }
+  { value: 'custom',label: '自定义比例' },
+  { value: 'amount',label: '自定义金额' }
 ];
+
+SH.AREAS = ['客厅', '厨房', '卫生间', '卧室', '公共区', '阳台', '其他'];
+SH.FREQS = ['每天', '每周', '每月'];
+SH.DOW = ['日', '一', '二', '三', '四', '五', '六'];
 
 SH.AVATAR_COLORS = ['#1f5e4d', '#c05b2d', '#2f5597', '#7c5cbf', '#b45309', '#0e7490', '#be185d', '#4d7c0f'];
 
@@ -128,19 +133,33 @@ SH.seed = function () {
   ];
 
   const dutyTasks = [
-    { id: 'd1', emoji: '🗑️', name: '倒垃圾',     freq: '每天' },
-    { id: 'd2', emoji: '🧹', name: '客厅清扫',   freq: '每周' },
-    { id: 'd3', emoji: '🍳', name: '厨房清洁',   freq: '每周' },
-    { id: 'd4', emoji: '🚿', name: '卫生间清洁', freq: '每周' },
-    { id: 'd5', emoji: '🧼', name: '公共区拖地', freq: '每周' }
+    { id: 'd1', emoji: '🗑️', name: '倒垃圾',     freq: '每天', area: '公共区', day: null },
+    { id: 'd2', emoji: '🧹', name: '客厅清扫',   freq: '每周', area: '客厅',   day: 6 },
+    { id: 'd3', emoji: '🍳', name: '厨房清洁',   freq: '每周', area: '厨房',   day: 0 },
+    { id: 'd4', emoji: '🚿', name: '卫生间清洁', freq: '每周', area: '卫生间', day: 6 },
+    { id: 'd5', emoji: '🧼', name: '公共区拖地', freq: '每周', area: '公共区', day: 0 },
+    { id: 'd6', emoji: '🪴', name: '阳台大扫除', freq: '每月', area: '阳台',   day: 1 }
   ];
 
   const weekStart = SH.utils.weekStartISO();
   const schedule = {
     weekStart: weekStart,
     weekEnd: SH.utils.weekEndISO(),
-    assignments: { d1: 'r2', d2: 'r1', d3: 'r3', d4: 'r4', d5: 'r1' },
-    done: { d1: today, d3: today }
+    assignments: { d1: 'r2', d2: 'r1', d3: 'r3', d4: 'r4', d5: 'r1', d6: 'r2' },
+    done: { d1: today, d3: today },
+    records: [
+      { id: 'rc1',  taskId: 'd1', roommateId: 'r2', date: SH.utils.daysAgoISO(1) },
+      { id: 'rc2',  taskId: 'd1', roommateId: 'r3', date: SH.utils.daysAgoISO(2) },
+      { id: 'rc3',  taskId: 'd1', roommateId: 'r1', date: SH.utils.daysAgoISO(3) },
+      { id: 'rc4',  taskId: 'd1', roommateId: 'r4', date: SH.utils.daysAgoISO(4) },
+      { id: 'rc5',  taskId: 'd1', roommateId: 'r2', date: SH.utils.daysAgoISO(5) },
+      { id: 'rc6',  taskId: 'd1', roommateId: 'r3', date: SH.utils.daysAgoISO(6) },
+      { id: 'rc7',  taskId: 'd2', roommateId: 'r2', date: SH.utils.daysAgoISO(7) },
+      { id: 'rc8',  taskId: 'd3', roommateId: 'r3', date: SH.utils.daysAgoISO(8) },
+      { id: 'rc9',  taskId: 'd4', roommateId: 'r4', date: SH.utils.daysAgoISO(7) },
+      { id: 'rc10', taskId: 'd5', roommateId: 'r1', date: SH.utils.daysAgoISO(8) }
+    ],
+    leaves: []
   };
 
   const items = [
@@ -161,6 +180,6 @@ SH.seed = function () {
 
   return {
     roommates, bills, dutyTasks, schedule, items, rules,
-    meta: { seededAt: today }
+    meta: { seededAt: today, version: 2 }
   };
 };

@@ -8,6 +8,8 @@ window.SH = window.SH || {};
   const U = SH.utils;
 
   let currentUserId = null;
+  const billFilter = { type: '', month: '', payer: '', status: '' };
+  let calMonthOffset = 0;
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -50,17 +52,17 @@ window.SH = window.SH || {};
     const total = monthBills.reduce((a, b) => a + b.amount, 0);
     document.getElementById('statExpense').textContent = U.fmtMoney(total);
 
-    // 待结算
-    const transfers = calc.settle(s.roommates, bills);
+    // 待结算（仅未结账单）
+    const openBills = bills.filter(b => !b.settled);
+    const transfers = calc.settle(s.roommates, openBills);
     const pending = transfers.reduce((a, t) => a + t.amount, 0);
     document.getElementById('statSettle').textContent = U.fmtMoney(pending);
 
     // 值日待办
     const pendingDuties = s.dutyTasks.filter(t => isPending(t.id));
-    const doneDuties = s.dutyTasks.filter(t => !isPending(t.id));
     const dutyEl = document.getElementById('homeDuty');
     if (!pendingDuties.length) {
-      dutyEl.innerHTML = `<div class="card empty">🎉 本周值日全部完成</div>`;
+      dutyEl.innerHTML = `<div class="card empty">🎉 值日全部完成</div>`;
     } else {
       dutyEl.innerHTML = pendingDuties.slice(0, 4).map(t => {
         const rid = s.schedule.assignments[t.id];
@@ -68,7 +70,7 @@ window.SH = window.SH || {};
           <span class="duty-emoji">${esc(t.emoji)}</span>
           <div class="duty-main">
             <div class="duty-name">${esc(t.name)}</div>
-            <div class="duty-assign"><b>${esc(store.roommateName(rid))}</b> · ${esc(t.freq)}</div>
+            <div class="duty-assign"><b>${esc(store.roommateName(rid))}</b> · ${esc(taskScheduleLabel(t))}</div>
           </div>
           <button class="ghost-btn" data-action="toggleDone" data-id="${t.id}">完成</button>
         </div>`;
@@ -108,10 +110,13 @@ window.SH = window.SH || {};
   /* ---- 费用 ---- */
   function renderBills() {
     const s = getState();
-    const bills = s.bills;
+    const allBills = s.bills;
 
+    fillBillFilters(allBills);
+
+    // 汇总（本月全部）
     const monthStart = U.monthStartISO();
-    const monthBills = bills.filter(b => b.date >= monthStart);
+    const monthBills = allBills.filter(b => b.date >= monthStart);
     const total = monthBills.reduce((a, b) => a + b.amount, 0);
     const avg = s.roommates.length ? total / s.roommates.length : 0;
     document.getElementById('billTotal').textContent = U.fmtMoney(total);
@@ -130,8 +135,10 @@ window.SH = window.SH || {};
       </div>`;
     }).join('') || '<div class="cat-row" style="color:var(--ink-3)">本月暂无账单</div>';
 
-    // 结算
-    const transfers = calc.settle(s.roommates, bills);
+    // 结算（仅未结账单）
+    const openBills = allBills.filter(b => !b.settled);
+    const settledCount = allBills.length - openBills.length;
+    const transfers = calc.settle(s.roommates, openBills);
     const pending = transfers.reduce((a, t) => a + t.amount, 0);
     const panel = document.getElementById('settlePanel');
     if (!transfers.length) {
@@ -140,7 +147,7 @@ window.SH = window.SH || {};
     } else {
       panel.className = 'settle-panel';
       panel.innerHTML = `
-        <div class="settle-title">待结算 <span class="mono">${U.fmtMoney(pending)}</span></div>
+        <div class="settle-title">待结算 <span class="mono">${U.fmtMoney(pending)}</span> · ${openBills.length} 笔未结${settledCount ? ` · ${settledCount} 笔已结` : ''}</div>
         ${transfers.map(t => `
           <div class="settle-item">
             <span>${esc(store.roommateName(t.from))} → ${esc(store.roommateName(t.to))}</span>
@@ -148,83 +155,244 @@ window.SH = window.SH || {};
           </div>`).join('')}`;
     }
 
-    // 账单列表
-    document.getElementById('billCount').textContent = `${bills.length} 笔`;
-    document.getElementById('billList').innerHTML = bills.length
-      ? bills.map(b => {
+    // 账单列表（筛选后）
+    const filtered = applyBillFilter(allBills);
+    document.getElementById('billCount').textContent = `${filtered.length} 笔`;
+    document.getElementById('billList').innerHTML = filtered.length
+      ? filtered.map(b => {
         const t = store.billType(b.type);
         return `<div class="card bill-card">
           <div class="bill-ico">${esc(t.emoji)}</div>
           <div class="bill-main">
-            <div class="bill-title">${t.label}${b.note ? ' · ' + esc(b.note) : ''}</div>
+            <div class="bill-title">${t.label}${b.note ? ' · ' + esc(b.note) : ''} ${b.settled ? '<span class="tag ok">已结</span>' : '<span class="tag low">未结</span>'}</div>
             <div class="bill-sub">${U.fmtDate(b.date)} · ${esc(store.roommateName(b.payerId))} 垫付 · ${esc(splitModeLabel(b))} ${b.splitIds.length}人</div>
           </div>
           <div class="bill-amt">
             <div class="mono">${U.fmtMoney(b.amount)}</div>
-            <button class="ghost-btn bill-delete" data-action="delBill" data-id="${b.id}" title="删除">删除</button>
+            <button class="ghost-btn bill-delete" data-action="toggleSettled" data-id="${b.id}">${b.settled ? '标记未结' : '标记已结'}</button>
+            <button class="ghost-btn bill-delete" data-action="delBill" data-id="${b.id}">删除</button>
           </div>
         </div>`;
       }).join('')
-      : `<div class="card empty">还没有账单，点右上角「记一笔」开始</div>`;
+      : `<div class="card empty">没有符合条件的账单</div>`;
   }
 
   function splitModeLabel(b) {
+    if (b.splitMode === 'amount') return '自定义金额';
     if (b.splitMode === 'custom') return '自定义比例';
     if (b.splitMode === 'head') return '按人头';
     return '均摊';
   }
 
+  function fillBillFilters(bills) {
+    const types = [...new Set(bills.map(b => b.type))];
+    const months = [...new Set(bills.map(b => b.date.slice(0, 7)))].sort().reverse();
+    const payers = [...new Set(bills.map(b => b.payerId))];
+
+    setSelectOptions('fType', [{ v: '', l: '全部类型' }].concat(types.map(t => ({ v: t, l: store.billType(t).emoji + ' ' + store.billType(t).label }))), billFilter.type);
+    setSelectOptions('fMonth', [{ v: '', l: '全部月份' }].concat(months.map(m => ({ v: m, l: m.replace('-', '年') + '月' }))), billFilter.month);
+    setSelectOptions('fPayer', [{ v: '', l: '全部付款人' }].concat(payers.map(p => ({ v: p, l: store.roommateName(p) }))), billFilter.payer);
+  }
+
+  function setSelectOptions(id, opts, selected) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const cur = (selected === undefined || selected === null) ? el.value : selected;
+    el.innerHTML = opts.map(o => `<option value="${o.v}" ${o.v === cur ? 'selected' : ''}>${esc(o.l)}</option>`).join('');
+  }
+
+  function applyBillFilter(bills) {
+    return bills.filter(b => {
+      if (billFilter.type && b.type !== billFilter.type) return false;
+      if (billFilter.month && b.date.slice(0, 7) !== billFilter.month) return false;
+      if (billFilter.payer && b.payerId !== billFilter.payer) return false;
+      if (billFilter.status === 'open' && b.settled) return false;
+      if (billFilter.status === 'settled' && !b.settled) return false;
+      return true;
+    });
+  }
+
+  function exportCsv() {
+    const filtered = applyBillFilter(getState().bills);
+    if (!filtered.length) { toast('没有可导出的账单'); return; }
+    const header = ['日期', '类型', '金额', '付款人', '分摊方式', '参与人', '备注', '状态'];
+    const rows = filtered.map(b => {
+      const t = store.billType(b.type);
+      const participants = b.splitIds.map(id => store.roommateName(id)).join('/');
+      return [b.date, t.label, b.amount, store.roommateName(b.payerId), splitModeLabel(b), participants, b.note || '', b.settled ? '已结' : '未结'];
+    });
+    const csv = [header, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '账单导出_' + U.todayISO() + '.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('已导出 CSV');
+  }
+
+  function csvCell(v) {
+    v = String(v == null ? '' : v);
+    if (/[",\n]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"';
+    return v;
+  }
+
   /* ---- 值日 ---- */
+  function taskScheduleLabel(t) {
+    if (t.freq === '每天') return '每天';
+    if (t.freq === '每周') return '每周' + SH.DOW[t.day || 0];
+    return '每月' + (t.day || 1) + '号';
+  }
+
   function isPending(taskId) {
     const s = getState();
     const task = s.dutyTasks.find(t => t.id === taskId);
     const doneDate = s.schedule.done[taskId];
     if (!doneDate) return true;
-    if (task && task.freq === '每天') return doneDate !== U.todayISO();
+    if (!task) return false;
+    if (task.freq === '每天') return doneDate !== U.todayISO();
+    if (task.freq === '每月') return doneDate < U.monthStartISO();
     return doneDate < s.schedule.weekStart || doneDate > s.schedule.weekEnd;
+  }
+
+  function dutyItemHtml(t) {
+    const s = getState();
+    const rid = s.schedule.assignments[t.id];
+    const done = !isPending(t.id);
+    const leave = store.getLeave(t.id);
+    return `<div class="duty-item ${done ? 'done' : ''}">
+      <span class="duty-emoji">${esc(t.emoji)}</span>
+      <div class="duty-main">
+        <div class="duty-name">${esc(t.name)} <span class="tag area">${esc(t.area || '其他')}</span></div>
+        <div class="duty-assign">
+          <button class="assign-link" data-action="assign" data-id="${t.id}">${esc(store.roommateName(rid))} ▾</button>
+          <span>· ${esc(taskScheduleLabel(t))}</span>
+          ${done ? '<span class="tag ok" style="margin-left:6px">已完成</span>' : ''}
+          ${leave ? '<span class="tag low" style="margin-left:6px">请假中</span>' : ''}
+        </div>
+      </div>
+      <button class="duty-check" data-action="toggleDone" data-id="${t.id}" aria-label="完成">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      </button>
+    </div>`;
   }
 
   function renderDuty() {
     const s = getState();
+    const pendingCount = s.dutyTasks.filter(t => isPending(t.id)).length;
     document.getElementById('weekBanner').innerHTML =
-      `本周排班 <span class="mono">${U.fmtDate(s.schedule.weekStart)} ~ ${U.fmtDate(s.schedule.weekEnd)}</span>`;
+      `本周排班 <span class="mono">${U.fmtDate(s.schedule.weekStart)} ~ ${U.fmtDate(s.schedule.weekEnd)}</span> · ${pendingCount} 项待完成`;
 
-    const doneCount = s.dutyTasks.filter(t => !isPending(t.id)).length;
-    document.getElementById('dutyList').innerHTML = s.dutyTasks.length
-      ? s.dutyTasks.map(t => {
-        const rid = s.schedule.assignments[t.id];
-        const done = !isPending(t.id);
-        return `<div class="duty-item ${done ? 'done' : ''}">
-          <span class="duty-emoji">${esc(t.emoji)}</span>
-          <div class="duty-main">
-            <div class="duty-name">${esc(t.name)}</div>
-            <div class="duty-assign">
-              <button class="assign-link" data-action="assign" data-id="${t.id}">${esc(store.roommateName(rid))} ▾</button>
-              <span>· ${esc(t.freq)}</span>
-              ${done ? '<span class="tag ok" style="margin-left:6px">已完成</span>' : ''}
-            </div>
-          </div>
-          <button class="duty-check" data-action="toggleDone" data-id="${t.id}" aria-label="完成">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-          </button>
-        </div>`;
-      }).join('')
-      : `<div class="card empty">还没有清洁任务，点右上角「添加任务」</div>`;
+    // 列表视图（按区域分组）
+    const groups = {};
+    s.dutyTasks.forEach(t => { const a = t.area || '其他'; (groups[a] = groups[a] || []).push(t); });
+    const order = SH.AREAS.filter(a => groups[a]).concat(Object.keys(groups).filter(a => !SH.AREAS.includes(a)));
+    document.getElementById('dutyList').innerHTML = order.length
+      ? order.map(area => `<div class="duty-area">${esc(area)}</div>${groups[area].map(dutyItemHtml).join('')}`).join('')
+      : `<div class="card empty">还没有清洁任务，点右下「添加任务」</div>`;
 
-    // 任务管理
+    // 任务管理（含换班/请假/删除）
     document.getElementById('taskList').innerHTML = s.dutyTasks.length
-      ? s.dutyTasks.map(t => `
-        <div class="card task-item">
+      ? s.dutyTasks.map(t => {
+        const leave = store.getLeave(t.id);
+        return `<div class="card task-item">
           <div class="task-left">
             <span class="task-emoji">${esc(t.emoji)}</span>
             <div>
               <div class="task-name">${esc(t.name)}</div>
-              <div class="task-freq">${esc(t.freq)}</div>
+              <div class="task-freq">${esc(t.area || '其他')} · ${esc(taskScheduleLabel(t))}</div>
             </div>
           </div>
-          <button class="ghost-btn danger" data-action="delTask" data-id="${t.id}">删除</button>
-        </div>`).join('')
+          <div class="task-actions">
+            <button class="ghost-btn" data-action="swap" data-id="${t.id}">换班</button>
+            <button class="ghost-btn ${leave ? 'danger' : ''}" data-action="leave" data-id="${t.id}">${leave ? '销假' : '请假'}</button>
+            <button class="ghost-btn danger" data-action="delTask" data-id="${t.id}">删除</button>
+          </div>
+        </div>`;
+      }).join('')
       : '';
+
+    renderStats();
+
+    if (!document.getElementById('dutyCalendarView').hidden) renderCalendar();
+  }
+
+  function renderStats() {
+    const s = getState();
+    const since = U.daysAgoISO(14);
+    const counts = {};
+    s.roommates.forEach(r => { counts[r.id] = 0; });
+    s.schedule.records.forEach(r => {
+      if (r.date >= since && counts[r.roommateId] !== undefined) counts[r.roommateId]++;
+    });
+    const ranked = s.roommates.map(r => ({ name: r.name, color: r.color, count: counts[r.id] })).sort((a, b) => b.count - a.count);
+    document.getElementById('dutyStats').innerHTML = ranked.length
+      ? ranked.map((r, i) => `
+        <div class="card task-item">
+          <div class="task-left">
+            <span class="rm-avatar" style="background:${r.color}">${esc(r.name[0])}</span>
+            <div>
+              <div class="task-name">${i === 0 ? '👑 ' : ''}${esc(r.name)}</div>
+              <div class="task-freq">近14天完成 ${r.count} 次</div>
+            </div>
+          </div>
+          <span class="mono" style="font-size:20px;font-weight:600">${r.count}</span>
+        </div>`).join('')
+      : `<div class="card empty">暂无完成记录</div>`;
+  }
+
+  /* ---- 日历视图 ---- */
+  function tasksOnDate(date) {
+    const s = getState();
+    const dow = date.getDay();
+    const dom = date.getDate();
+    return s.dutyTasks.filter(t => {
+      if (t.freq === '每天') return true;
+      if (t.freq === '每周') return t.day === dow;
+      if (t.freq === '每月') return t.day === dom;
+      return false;
+    });
+  }
+
+  function renderCalendar() {
+    const s = getState();
+    const now = new Date();
+    const base = new Date(now.getFullYear(), now.getMonth() + calMonthOffset, 1);
+    const year = base.getFullYear(), month = base.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const firstDow = base.getDay();
+    const todayISO = U.todayISO();
+
+    let html = `<div class="cal-head">
+      <button class="icon-btn" data-action="calPrev" aria-label="上个月">‹</button>
+      <div class="cal-title">${year} 年 ${month + 1} 月</div>
+      <button class="icon-btn" data-action="calNext" aria-label="下个月">›</button>
+    </div><div class="cal-grid">`;
+    html += SH.DOW.map(d => `<div class="cal-dow">周${d}</div>`).join('');
+    for (let i = 0; i < firstDow; i++) html += `<div class="cal-cell empty"></div>`;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(year, month, d);
+      const iso = U.isoDate(date);
+      const dayTasks = tasksOnDate(date);
+      const isToday = iso === todayISO;
+      html += `<div class="cal-cell ${isToday ? 'today' : ''}">
+        <div class="cal-date">${d}</div>
+        <div class="cal-tasks">${dayTasks.map(t => {
+          const rid = s.schedule.assignments[t.id];
+          return `<div class="cal-task" title="${esc(t.name)}·${esc(store.roommateName(rid))}">${esc(t.emoji)}<span>${esc(store.roommateName(rid)[0])}</span></div>`;
+        }).join('')}</div>
+      </div>`;
+    }
+    html += `</div>`;
+    document.getElementById('dutyCalendar').innerHTML = html;
+  }
+
+  function setDutyView(view) {
+    document.querySelectorAll('#dutySeg .seg-btn').forEach(b => b.classList.toggle('is-active', b.dataset.dutyview === view));
+    document.getElementById('dutyListView').hidden = view !== 'list';
+    document.getElementById('dutyCalendarView').hidden = view !== 'calendar';
+    if (view === 'calendar') renderCalendar();
   }
 
   /* ---- 物品 ---- */
@@ -307,12 +475,9 @@ window.SH = window.SH || {};
   function openModal(title, bodyHtml, onSubmit) {
     document.getElementById('modalTitle').textContent = title;
     document.getElementById('modalBody').innerHTML = bodyHtml;
-    const backdrop = document.getElementById('modalBackdrop');
-    const modal = document.getElementById('modal');
-    backdrop.hidden = false;
-    modal.hidden = false;
-
-    modal._onSubmit = onSubmit;
+    document.getElementById('modalBackdrop').hidden = false;
+    document.getElementById('modal').hidden = false;
+    document.getElementById('modal')._onSubmit = onSubmit;
   }
 
   function closeModal() {
@@ -355,52 +520,63 @@ window.SH = window.SH || {};
         </div>
       </form>
     `, function (form) {
-      const amount = parseFloat(form.amount.value);
+      const amount = Math.round((parseFloat(form.amount.value) || 0) * 100) / 100;
       if (!amount || amount <= 0) { toast('请输入有效金额'); return false; }
       const splitIds = [...document.querySelectorAll('#splitChips .chip.is-on')].map(c => c.dataset.id);
       if (!splitIds.length) { toast('请至少选择一位参与人'); return false; }
       const mode = form.splitMode.value;
-      let weights = null;
+      let weights = null, splitAmounts = null;
       if (mode === 'custom') {
         weights = {};
-        splitIds.forEach(id => {
-          const w = parseFloat(document.querySelector(`input[name="w_${id}"]`).value) || 0;
-          weights[id] = w;
-        });
+        splitIds.forEach(id => { weights[id] = parseFloat(document.querySelector(`input[name="w_${id}"]`).value) || 0; });
         if (splitIds.every(id => !weights[id])) { toast('请填写有效的分摊比例'); return false; }
+      } else if (mode === 'amount') {
+        splitAmounts = {};
+        splitIds.forEach(id => { splitAmounts[id] = Math.round((parseFloat(document.querySelector(`input[name="a_${id}"]`).value) || 0) * 100) / 100; });
+        const sum = splitIds.reduce((a, id) => a + splitAmounts[id], 0);
+        if (Math.abs(sum - amount) > 0.01) { toast(`每人金额总和需等于 ¥${U.fmtNum(amount)}`); return false; }
       }
       store.addBill({
-        type: form.type.value,
-        amount: Math.round(amount * 100) / 100,
-        payerId: form.payer.value,
-        splitMode: mode,
-        splitIds,
-        splitWeights: weights,
-        date: form.date.value,
-        note: form.note.value.trim()
+        type: form.type.value, amount, payerId: form.payer.value,
+        splitMode: mode, splitIds, splitWeights: weights, splitAmounts,
+        date: form.date.value, note: form.note.value.trim(), settled: false
       });
       toast('账单已记录');
       return true;
     });
 
-    // 交互：分摊方式切换 + 参与人切换
+    // 交互
     const splitMode = document.querySelector('[name="splitMode"]');
     const chipGroup = document.getElementById('splitChips');
+    const amountInput = document.querySelector('[name="amount"]');
     function refreshCustom() {
       const box = document.getElementById('customWeights');
       const mode = splitMode.value;
-      if (mode !== 'custom') { box.hidden = true; box.innerHTML = ''; return; }
       const ids = [...chipGroup.querySelectorAll('.chip.is-on')].map(c => c.dataset.id);
+      if (mode !== 'custom' && mode !== 'amount') { box.hidden = true; box.innerHTML = ''; return; }
       box.hidden = false;
-      box.innerHTML = `<label>自定义比例（权重）</label>` + ids.map(id => {
-        const r = store.roommate(id);
-        return `<div class="field-row" style="margin-top:8px;align-items:center">
-          <div class="field" style="flex:1;margin:0"><label style="font-weight:500;color:var(--ink)">${esc(r.name)}</label></div>
-          <div class="field" style="flex:1;margin:0"><input class="mono" name="w_${id}" type="number" step="0.1" min="0" value="1"></div>
-        </div>`;
-      }).join('');
+      if (mode === 'custom') {
+        box.innerHTML = `<label>自定义比例（权重）</label>` + ids.map(id => {
+          const r = store.roommate(id);
+          return `<div class="field-row" style="margin-top:8px;align-items:center">
+            <div class="field" style="flex:1;margin:0"><label style="font-weight:500;color:var(--ink)">${esc(r.name)}</label></div>
+            <div class="field" style="flex:1;margin:0"><input class="mono" name="w_${id}" type="number" step="0.1" min="0" value="1"></div>
+          </div>`;
+        }).join('');
+      } else {
+        const amt = parseFloat(amountInput.value) || 0;
+        const each = ids.length ? Math.round(amt / ids.length * 100) / 100 : 0;
+        box.innerHTML = `<label>每人具体金额（总和需等于账单金额）</label>` + ids.map(id => {
+          const r = store.roommate(id);
+          return `<div class="field-row" style="margin-top:8px;align-items:center">
+            <div class="field" style="flex:1;margin:0"><label style="font-weight:500;color:var(--ink)">${esc(r.name)}</label></div>
+            <div class="field" style="flex:1;margin:0"><input class="mono" name="a_${id}" type="number" step="0.01" min="0" value="${each}"></div>
+          </div>`;
+        }).join('');
+      }
     }
     splitMode.addEventListener('change', refreshCustom);
+    amountInput.addEventListener('input', refreshCustom);
     chipGroup.addEventListener('click', function (e) {
       const chip = e.target.closest('.chip');
       if (!chip) return;
@@ -410,21 +586,90 @@ window.SH = window.SH || {};
   }
 
   function openDutyForm() {
+    const areaOpts = SH.AREAS.map(a => `<option>${a}</option>`).join('');
     openModal('添加清洁任务', `
       <form id="dutyForm">
         <div class="field-row">
           <div class="field"><label>图标</label><input name="emoji" value="🧹" maxlength="4"></div>
           <div class="field"><label>任务名称</label><input name="name" placeholder="如：客厅清扫" required></div>
         </div>
-        <div class="field"><label>频率</label><select name="freq"><option>每天</option><option>每周</option></select></div>
+        <div class="field-row">
+          <div class="field"><label>区域</label><select name="area">${areaOpts}</select></div>
+          <div class="field"><label>频率</label><select name="freq" id="dutyFreq"><option>每天</option><option>每周</option><option>每月</option></select></div>
+        </div>
+        <div class="field" id="dutyDayField" hidden><label>每周的星期几 / 每月几号</label><select name="day" id="dutyDaySelect"></select></div>
         <div class="modal-actions">
           <button type="button" class="ghost-btn" data-close>取消</button>
           <button type="submit" class="primary-btn">添加</button>
         </div>
       </form>
     `, function (form) {
-      store.addDutyTask({ emoji: form.emoji.value.trim() || '🧹', name: form.name.value.trim(), freq: form.freq.value });
+      const freq = form.freq.value;
+      const day = freq === '每天' ? null : Number(form.day.value);
+      store.addDutyTask({ emoji: form.emoji.value.trim() || '🧹', name: form.name.value.trim(), freq, area: form.area.value, day });
       toast('任务已添加');
+      return true;
+    });
+
+    const freqEl = document.getElementById('dutyFreq');
+    const dayField = document.getElementById('dutyDayField');
+    const daySelect = document.getElementById('dutyDaySelect');
+    function refreshDay() {
+      const f = freqEl.value;
+      if (f === '每天') { dayField.hidden = true; return; }
+      dayField.hidden = false;
+      if (f === '每周') daySelect.innerHTML = SH.DOW.map((d, i) => `<option value="${i}">周${d}</option>`).join('');
+      else daySelect.innerHTML = Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}">${i + 1} 号</option>`).join('');
+    }
+    freqEl.addEventListener('change', refreshDay);
+    refreshDay();
+  }
+
+  function openSwapForm(taskId) {
+    const s = getState();
+    const cur = s.dutyTasks.find(t => t.id === taskId);
+    const others = s.dutyTasks.filter(t => t.id !== taskId);
+    const opts = others.map(t => `<option value="${t.id}">${esc(t.emoji)} ${esc(t.name)}（现：${esc(store.roommateName(s.schedule.assignments[t.id]))}）</option>`).join('');
+    openModal(`换班 · ${cur.name}`, `
+      <form id="swapForm">
+        <div class="field"><label>与哪个任务交换负责人？</label><select name="target">${opts}</select></div>
+        <div class="field-hint">当前负责人：${esc(store.roommateName(s.schedule.assignments[taskId]))}</div>
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn" data-close>取消</button>
+          <button type="submit" class="primary-btn">交换</button>
+        </div>
+      </form>
+    `, function (form) {
+      store.swapAssignments(taskId, form.target.value);
+      toast('已交换负责人');
+      return true;
+    });
+  }
+
+  function openLeaveForm(taskId) {
+    const s = getState();
+    const cur = s.dutyTasks.find(t => t.id === taskId);
+    const existing = store.getLeave(taskId);
+    if (existing) {
+      openModal(`请假 · ${cur.name}`, `
+        <div class="field">「${esc(store.roommateName(existing.roommateId))}」当前请假中${existing.reason ? '：' + esc(existing.reason) : ''}</div>
+        <div class="modal-actions"><button type="button" class="primary-btn" data-action="cancelLeave" data-id="${taskId}">销假</button></div>
+      `);
+      return;
+    }
+    const assignee = s.schedule.assignments[taskId];
+    openModal(`请假 · ${cur.name}`, `
+      <form id="leaveForm">
+        <div class="field"><label>请假人</label><select name="who">${optionsOfRoommates(assignee)}</select></div>
+        <div class="field"><label>原因（可选）</label><input name="reason" placeholder="如：出差一周"></div>
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn" data-close>取消</button>
+          <button type="submit" class="primary-btn">登记请假</button>
+        </div>
+      </form>
+    `, function (form) {
+      store.addLeave(taskId, form.who.value, form.reason.value.trim());
+      toast('已登记请假');
       return true;
     });
   }
@@ -566,8 +811,8 @@ window.SH = window.SH || {};
 
   const actions = {
     // 值日
-    toggleDone(id) { store.toggleDone(id); renderHome(); renderDuty(); },
-    delTask(id) { if (confirm('删除该清洁任务？')) { store.removeDutyTask(id); renderAll(); } },
+    toggleDone(id) { store.toggleDone(id, me()); renderHome(); renderDuty(); },
+    delTask(id) { if (confirm('删除该清洁任务？')) { store.removeDutyTask(id); renderHome(); renderDuty(); } },
     assign(id) { openAssignForm(id); },
     confirmAssign(id) {
       const chip = document.querySelector('#assignChips .chip.is-on');
@@ -576,10 +821,16 @@ window.SH = window.SH || {};
       closeModal(); renderHome(); renderDuty(); toast('已重新指派');
     },
     rotate() { store.rotate(); renderHome(); renderDuty(); toast('已轮换到下周排班'); },
+    swap(id) { openSwapForm(id); },
+    leave(id) { openLeaveForm(id); },
+    cancelLeave(id) { store.removeLeave(id); closeModal(); renderHome(); renderDuty(); toast('已销假'); },
+    calPrev() { calMonthOffset--; renderCalendar(); },
+    calNext() { calMonthOffset++; renderCalendar(); },
 
     // 账单
     addBill() { openBillForm(); },
-    delBill(id) { if (confirm('删除这笔账单？')) { store.removeBill(id); renderAll(); } },
+    delBill(id) { if (confirm('删除这笔账单？')) { store.removeBill(id); renderHome(); renderBills(); } },
+    toggleSettled(id) { store.toggleSettled(id); renderHome(); renderBills(); },
 
     // 物品
     addItem() { openItemForm(); },
@@ -610,13 +861,14 @@ window.SH = window.SH || {};
   };
 
   function handleClick(e) {
-    // 关闭按钮
     if (e.target.closest('[data-close]')) { closeModal(); return; }
 
     const tab = e.target.closest('[data-tab]');
     if (tab) { switchTab(tab.dataset.tab); return; }
     const goto = e.target.closest('[data-goto]');
     if (goto) { switchTab(goto.dataset.goto); return; }
+    const dv = e.target.closest('[data-dutyview]');
+    if (dv) { setDutyView(dv.dataset.dutyview); return; }
 
     const el = e.target.closest('[data-action]');
     if (el) {
@@ -652,6 +904,15 @@ window.SH = window.SH || {};
     document.addEventListener('submit', handleSubmit);
     document.getElementById('modalClose').addEventListener('click', closeModal);
     document.getElementById('modalBackdrop').addEventListener('click', closeModal);
+
+    // 账单筛选
+    ['fType', 'fMonth', 'fPayer', 'fStatus'].forEach(id => {
+      document.getElementById(id).addEventListener('change', function (e) {
+        billFilter[id.slice(1).toLowerCase()] = e.target.value;
+        renderBills();
+      });
+    });
+    document.getElementById('exportBtn').addEventListener('click', exportCsv);
   }
 
   document.addEventListener('DOMContentLoaded', init);
