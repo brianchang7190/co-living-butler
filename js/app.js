@@ -234,6 +234,8 @@ window.SH = window.SH || {};
 
   function csvCell(v) {
     v = String(v == null ? '' : v);
+    // 防 CSV/公式注入：以 = + - @ 制表符/回车 开头的字段加 ' 前缀，避免被 Excel 当作公式执行
+    if (/^[=+\-@\t\r]/.test(v)) v = "'" + v;
     if (/[",\n]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"';
     return v;
   }
