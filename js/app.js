@@ -631,6 +631,7 @@ window.SH = window.SH || {};
     const s = getState();
     const cur = s.dutyTasks.find(t => t.id === taskId);
     const others = s.dutyTasks.filter(t => t.id !== taskId);
+    if (!others.length) { toast('没有其他任务可交换'); return; }
     const opts = others.map(t => `<option value="${t.id}">${esc(t.emoji)} ${esc(t.name)}（现：${esc(store.roommateName(s.schedule.assignments[t.id]))}）</option>`).join('');
     openModal(`换班 · ${cur.name}`, `
       <form id="swapForm">
@@ -823,6 +824,7 @@ window.SH = window.SH || {};
       closeModal(); renderHome(); renderDuty(); toast('已重新指派');
     },
     rotate() { store.rotate(); renderHome(); renderDuty(); toast('已轮换到下周排班'); },
+    addDuty() { openDutyForm(); },
     swap(id) { openSwapForm(id); },
     leave(id) { openLeaveForm(id); },
     cancelLeave(id) { store.removeLeave(id); closeModal(); renderHome(); renderDuty(); toast('已销假'); },
@@ -831,6 +833,7 @@ window.SH = window.SH || {};
 
     // 账单
     addBill() { openBillForm(); },
+    exportCsv() { exportCsv(); },
     delBill(id) { if (confirm('删除这笔账单？')) { store.removeBill(id); renderHome(); renderBills(); } },
     toggleSettled(id) { store.toggleSettled(id); renderHome(); renderBills(); },
 
@@ -914,7 +917,6 @@ window.SH = window.SH || {};
         renderBills();
       });
     });
-    document.getElementById('exportBtn').addEventListener('click', exportCsv);
   }
 
   document.addEventListener('DOMContentLoaded', init);

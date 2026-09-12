@@ -263,7 +263,8 @@ SH.store = (function () {
     rotate() {
       const ids = state.roommates.map(r => r.id);
       if (!ids.length) return;
-      const tasks = state.dutyTasks;
+      // 每月任务不随周轮换，仅每天/每周任务轮换
+      const tasks = state.dutyTasks.filter(t => t.freq !== '每月');
       tasks.forEach((t, idx) => {
         const cur = state.schedule.assignments[t.id];
         const curIdx = ids.indexOf(cur);
